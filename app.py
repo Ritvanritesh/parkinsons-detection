@@ -14,17 +14,25 @@ else:
 
     def extract_features(file_path):
         try:
+            # Ensure file is valid WAV and mono
             snd = parselmouth.Sound(file_path)
+
+            if snd.n_channels != 1:
+                st.warning("Converting stereo to mono...")
+                samples = np.mean(snd.values, axis=0)
+                snd = parselmouth.Sound(values=samples, sampling_frequency=snd.sampling_frequency)
+
             pitch = snd.to_pitch()
             point_process = parselmouth.praat.call(snd, "To PointProcess (periodic, cc)", 75, 500)
 
             jitter = parselmouth.praat.call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
             shimmer = parselmouth.praat.call([snd, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
-            hnr = parselmouth.praat.call(snd, "Get harmonics-to-noise ratio", 0.0, 0.0)
+            hnr = parselmouth.praat.call(snd, "To Harmonicity (cc)", 0.01, 75, 0.1, 1.0)
+            hnr_value = parselmouth.praat.call(hnr, "Get mean", 0, 0)
 
-            return np.array([jitter, shimmer, hnr])
+            return np.array([jitter, shimmer, hnr_value])
         except Exception as e:
-            st.error(f"Feature extraction failed: {e}")
+            st.error(f"⚠️ Feature extraction failed: {e}")
             return None
 
     st.title("🧠 Parkinson's Detection from Voice")
