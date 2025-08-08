@@ -1,31 +1,29 @@
 # parkinsons_voice_app.py
 import streamlit as st
+from audio_recorder_streamlit import audio_recorder
 import librosa
-import librosa.display
 import numpy as np
 import parselmouth
 import pandas as pd
 from scipy.stats import entropy
 import joblib
-import warnings
-from io import BytesIO
 import os
 import tempfile
+import matplotlib
+matplotlib.use('Agg')  # Set the backend before importing pyplot
 import matplotlib.pyplot as plt
 from fpdf import FPDF
 import time
-from audio_recorder_streamlit import audio_recorder  # microphone recorder component
-import soundfile as sf
+import warnings
 
-# -------------------------
-# Config
-# -------------------------
-st.set_page_config(page_title="Parkinson's Voice Analysis", page_icon="🧠", layout="wide")
-MODEL_PATH = "parkinsons_model.pklb"  # expected model filename
+# Set page config
+st.set_page_config(
+    page_title="Parkinson's Voice Analysis",
+    page_icon="🧠",
+    layout="wide"
+)
 
-# -------------------------
-# Helper: safe praat call
-# -------------------------
+# --- 1. Helper Functions ---
 def safe_praat_call(func, *args, default=0):
     try:
         return func(*args)
@@ -33,123 +31,46 @@ def safe_praat_call(func, *args, default=0):
         warnings.warn(f"Praat call failed: {str(e)}")
         return default
 
-# -------------------------
-# Load model (no fallback)
-# If model file missing, allow upload in sidebar
-# -------------------------
-@st.cache_resource
-def load_model_from_disk(path):
-    return joblib.load(path)
-
-def get_model():
-    # If file present, load it
-    if os.path.exists(MODEL_PATH):
-        try:
-            return load_model_from_disk(MODEL_PATH)
-        except Exception as e:
-            st.sidebar.error(f"Failed to load existing model '{MODEL_PATH}': {e}")
-            st.stop()
-    # otherwise check sidebar uploader
-    uploaded_model = st.sidebar.file_uploader("Upload model (.joblib or .pkl)", type=["joblib", "pkl"])
-    if uploaded_model:
-        try:
-            # save uploaded model to disk
-            with open(MODEL_PATH, "wb") as f:
-                f.write(uploaded_model.getvalue())
-            return load_model_from_disk(MODEL_PATH)
-        except Exception as e:
-            st.sidebar.error(f"Failed to save/load uploaded model: {e}")
-            st.stop()
-    else:
-        st.sidebar.info(f"Place your trained model file named '{MODEL_PATH}' in app folder or upload it here.")
-        st.stop()
-
-# -------------------------
-# PDF report creator
-# -------------------------
-def create_pdf_report(features: dict, prediction: int, proba: float, audio_plots: list):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-
-    # Title
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt="Parkinson's Voice Analysis Report", ln=1, align='C')
-    pdf.ln(8)
-
-    # Results
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(200, 10, txt="Diagnostic Results", ln=1)
-    pdf.set_font("Arial", size=12)
-    pred_text = "Possible Parkinson's" if prediction else "Healthy"
-    pdf.cell(200, 8, txt=f"Prediction: {pred_text}", ln=1)
-    pdf.cell(200, 8, txt=f"Confidence: {proba*100:.1f}%", ln=1)
-    pdf.ln(6)
-
-    # Features
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(200, 8, txt="Feature Analysis (selected values)", ln=1)
-    pdf.set_font("Arial", size=10)
-    col_width = pdf.w / 2 - 20
-    row_height = pdf.font_size * 1.6
-    i = 0
-    for k, v in features.items():
-        if i % 2 == 0:
-            pdf.set_fill_color(240, 240, 240)
-        else:
-            pdf.set_fill_color(255, 255, 255)
-        pdf.cell(col_width, row_height, txt=str(k), border=1, fill=True)
-        pdf.cell(col_width, row_height, txt=f"{v:.4f}", border=1, fill=True, ln=1)
-        i += 1
-
-    # Add plots
-    for plot in audio_plots:
-        pdf.add_page()
-        try:
-            pdf.image(plot, x=10, y=10, w=190)
-        except Exception:
-            pass
-        try:
-            os.unlink(plot)
-        except Exception:
-            pass
-
-    return bytes(pdf.output(dest='S'))
-
-# -------------------------
-# Plotting helpers
-# -------------------------
 def plot_audio_features(y, sr):
+    """Generate waveform and spectrogram plots"""
     plots = []
-
-    # Waveform
-    plt.figure(figsize=(10, 3))
-    librosa.display.waveshow(y, sr=sr)
-    plt.title('Audio Waveform')
-    plt.tight_layout()
-    waveform_path = os.path.join(tempfile.gettempdir(), f"waveform_{int(time.time()*1000)}.png")
-    plt.savefig(waveform_path, bbox_inches='tight')
-    plt.close()
+    
+    # Reset matplotlib style to avoid cycler issues
+    plt.style.use('default')
+    
+    # Waveform plot
+    fig, ax = plt.subplots(figsize=(10, 4))
+    librosa.display.waveshow(y, sr=sr, ax=ax)
+    ax.set_title('Audio Waveform')
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Amplitude')
+    waveform_path = os.path.join(tempfile.gettempdir(), f"waveform_{time.time()}.png")
+    fig.savefig(waveform_path, bbox_inches='tight')
+    plt.close(fig)
     plots.append(waveform_path)
-
-    # Spectrogram
-    plt.figure(figsize=(10, 3))
+    
+    # Spectrogram plot
+    fig, ax = plt.subplots(figsize=(10, 4))
     D = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
-    librosa.display.specshow(D, sr=sr, x_axis='time', y_axis='log')
-    plt.colorbar(format='%+2.0f dB')
-    plt.title('Spectrogram (log scale)')
-    plt.tight_layout()
-    spectrogram_path = os.path.join(tempfile.gettempdir(), f"spectrogram_{int(time.time()*1000)}.png")
-    plt.savefig(spectrogram_path, bbox_inches='tight')
-    plt.close()
+    img = librosa.display.specshow(D, sr=sr, x_axis='time', y_axis='log', ax=ax)
+    fig.colorbar(img, ax=ax, format='%+2.0f dB')
+    ax.set_title('Spectrogram')
+    spectrogram_path = os.path.join(tempfile.gettempdir(), f"spectrogram_{time.time()}.png")
+    fig.savefig(spectrogram_path, bbox_inches='tight')
+    plt.close(fig)
     plots.append(spectrogram_path)
-
+    
     return plots
 
-# -------------------------
-# Feature extraction (parselmouth + librosa)
-# Returns (features_dict, audio_plots)
-# -------------------------
+# --- 2. Model Loading ---
+@st.cache_resource
+def load_model():
+    if not os.path.exists("parkinsons_model.pkl"):
+        st.error("❌ Model file 'parkinsons_model.pkl' not found. Please add it to your app directory.")
+        st.stop()
+    return joblib.load("parkinsons_model.pkl")
+
+# --- 3. Feature Extraction ---
 def extract_features(audio_path):
     features = {
         "MDVP:Fo(Hz)": 0, "MDVP:Fhi(Hz)": 0, "MDVP:Flo(Hz)": 0,
@@ -166,168 +87,202 @@ def extract_features(audio_path):
         snd = parselmouth.Sound(audio_path)
 
         if snd.duration < 0.5:
-            st.warning("Audio too short for analysis (minimum 0.5 seconds).")
+            st.warning("Audio too short for analysis (minimum 0.5 seconds)")
             return None, None
 
-        audio_plots = plot_audio_features(y, sr)
-
-        # Pitch features
+        # Pitch analysis
         pitch = snd.to_pitch()
-        try:
-            f0_values = pitch.selected_array['frequency']
-        except Exception:
-            f0_values = np.array([])
+        f0_values = pitch.selected_array['frequency']
         f0_values = f0_values[f0_values > 0]
 
-        if len(f0_values) > 0:
-            features["MDVP:Fo(Hz)"] = float(np.mean(f0_values)) if len(f0_values) > 0 else 0
-            features["MDVP:Fhi(Hz)"] = float(np.max(f0_values)) if len(f0_values) > 0 else 0
-            features["MDVP:Flo(Hz)"] = float(np.min(f0_values)) if len(f0_values) > 0 else 0
-            features["PPE"] = float(entropy(f0_values)) if len(f0_values) > 1 else 0
+        if len(f0_values) > 10:
+            features.update({
+                "MDVP:Fo(Hz)": np.mean(f0_values),
+                "MDVP:Fhi(Hz)": np.max(f0_values),
+                "MDVP:Flo(Hz)": np.min(f0_values),
+                "PPE": entropy(f0_values) if len(f0_values) > 1 else 0
+            })
 
-        # Point process for jitter/shimmer
-        point_process = safe_praat_call(parselmouth.praat.call, snd, "To PointProcess (periodic, cc)", 75, 300)
+        # Jitter and shimmer analysis
+        point_process = parselmouth.praat.call(snd, "To PointProcess (periodic, cc)", 75, 300)
         jitter_local = safe_praat_call(parselmouth.praat.call, point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
         shimmer_local = safe_praat_call(parselmouth.praat.call, [snd, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
 
         features.update({
-            "MDVP:Jitter(%)": float(jitter_local),
-            "MDVP:Jitter(Abs)": float(jitter_local),
-            "MDVP:RAP": float(jitter_local),
-            "MDVP:PPQ": float(jitter_local),
-            "Jitter:DDP": float(jitter_local) * 3,
-            "MDVP:Shimmer": float(shimmer_local),
-            "MDVP:Shimmer(dB)": float(shimmer_local),
-            "Shimmer:APQ3": float(shimmer_local) / 3 if shimmer_local else 0,
-            "Shimmer:APQ5": float(shimmer_local) / 5 if shimmer_local else 0,
-            "MDVP:APQ": float(shimmer_local),
-            "Shimmer:DDA": float(shimmer_local) * 3 if shimmer_local else 0,
+            "MDVP:Jitter(%)": jitter_local,
+            "MDVP:Jitter(Abs)": jitter_local,
+            "MDVP:RAP": jitter_local,
+            "MDVP:PPQ": jitter_local,
+            "Jitter:DDP": jitter_local * 3,
+            "MDVP:Shimmer": shimmer_local,
+            "MDVP:Shimmer(dB)": shimmer_local,
+            "Shimmer:APQ3": shimmer_local / 3,
+            "Shimmer:APQ5": shimmer_local / 5,
+            "MDVP:APQ": shimmer_local,
+            "Shimmer:DDA": shimmer_local * 3,
         })
 
+        # Harmonicity analysis
         harmonicity = snd.to_harmonicity_cc()
         hnr = safe_praat_call(parselmouth.praat.call, harmonicity, "Get mean", 0, 0)
-        features["HNR"] = float(hnr)
-        features["NHR"] = float(1 / hnr) if (hnr and hnr > 0) else 0
+        features["HNR"] = hnr
+        features["NHR"] = 1 / hnr if hnr > 0 else 0
 
-        # Additional derived features
+        # Nonlinear features
         features.update({
-            "RPDE": float(entropy(f0_values)) if len(f0_values) > 0 else 0,
-            "DFA": float(librosa.feature.rms(y=y).mean()),
-            "spread1": float(np.std(f0_values)) if len(f0_values) > 0 else 0,
-            "spread2": float(np.var(f0_values)) if len(f0_values) > 0 else 0,
-            "D2": float(np.percentile(f0_values, 99)) if len(f0_values) > 0 else 0,
+            "RPDE": entropy(f0_values),
+            "DFA": librosa.feature.rms(y=y).mean(),
+            "spread1": np.std(f0_values),
+            "spread2": np.var(f0_values),
+            "D2": np.percentile(f0_values, 99),
         })
 
-        return features, audio_plots
+        return features, plot_audio_features(y, sr)
 
     except Exception as e:
-        st.error(f"Feature extraction failed: {e}")
+        st.error(f"Feature extraction failed: {str(e)}")
         return None, None
     finally:
-        # remove temporary audio file if it's in temp folder
         try:
-            if audio_path.startswith(tempfile.gettempdir()):
-                os.unlink(audio_path)
-        except Exception:
+            os.unlink(audio_path)
+        except:
             pass
 
-# -------------------------
-# Main app UI
-# -------------------------
+# --- 4. PDF Report Generation ---
+def create_pdf_report(features, prediction, proba, audio_plots):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    
+    # Title
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(200, 10, txt="Parkinson's Voice Analysis Report", ln=1, align='C')
+    pdf.ln(10)
+    
+    # Results
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Diagnostic Results", ln=1)
+    pdf.set_font("Arial", size=12)
+    
+    pred_text = "Possible Parkinson's" if prediction else "Healthy"
+    pdf.cell(200, 10, txt=f"Prediction: {pred_text}", ln=1)
+    pdf.cell(200, 10, txt=f"Confidence: {proba*100:.1f}%", ln=1)
+    pdf.ln(10)
+    
+    # Features
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Feature Analysis", ln=1)
+    pdf.set_font("Arial", size=10)
+    
+    col_width = pdf.w / 3
+    row_height = pdf.font_size * 1.5
+    for i, (k, v) in enumerate(features.items()):
+        if i % 2 == 0:
+            pdf.set_fill_color(240, 240, 240)
+        else:
+            pdf.set_fill_color(255, 255, 255)
+            
+        pdf.cell(col_width, row_height, txt=k, border=1, fill=True)
+        pdf.cell(col_width, row_height, txt=f"{v:.4f}", border=1, fill=True, ln=1)
+    
+    # Add plots
+    for plot in audio_plots:
+        pdf.add_page()
+        pdf.image(plot, x=10, y=10, w=180)
+        try:
+            os.unlink(plot)
+        except:
+            pass
+    
+    return pdf.output(dest='S').encode('latin-1')
+
+# --- 5. Main Application ---
 def main():
     st.title("🧠 Parkinson's Disease Voice Analysis")
-    st.markdown("Record or upload a short sustained vowel (e.g., 'ahhh') for 3–5 seconds for analysis.")
+    st.markdown("Record or upload a short 'ahhh' recording (3-5 seconds) for analysis")
 
-    # Sidebar: model upload / instructions
-    st.sidebar.header("Model & Instructions")
-    st.sidebar.markdown(
-        "- Provide a trained classifier file named `parkinsons_model.pklb` (or upload it here).\n"
-        "- Recommended input: short sustained vowel (3–5s), mono WAV, 22050 Hz.\n"
-        "- If the model is not present, upload it in the sidebar."
-    )
-    # Allow optional model upload in sidebar (handled in get_model)
-    _ = st.sidebar.empty()
+    with st.sidebar:
+        st.header("Instructions")
+        st.markdown("""
+        1. Record using microphone or upload WAV file
+        2. Click Analyze
+        3. View results and download report
+        """)
 
-    # Session state for audio path
-    if 'audio_file' not in st.session_state:
-        st.session_state.audio_file = None
+    # Audio input section
+    audio_source = None
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Live Recording")
+        audio_bytes = audio_recorder(
+            text="Click to record (say 'ahhh' for 3-5 seconds):",
+            pause_threshold=5.0,
+            recording_color="#e8b62c",
+            neutral_color="#6aa36f"
+        )
+        if audio_bytes:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio_bytes)
+                audio_source = tmp.name
+            st.audio(audio_bytes, format="audio/wav")
 
-    # Live recorder
-    st.subheader("🎙 Live Recording (in-browser)")
-    st.write("Press record, speak the sustained vowel for ~3–5s, then stop.")
-    audio_bytes = audio_recorder(sample_rate=22050, pause_threshold=2.0, max_length=7)
+    with col2:
+        st.subheader("Or Upload Audio File")
+        uploaded_file = st.file_uploader("Choose WAV file", type=["wav"], label_visibility="collapsed")
+        if uploaded_file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(uploaded_file.getvalue())
+                audio_source = tmp.name
+            st.audio(uploaded_file.getvalue(), format="audio/wav")
 
-    if audio_bytes:
-        # audio_bytes is raw bytes of a WAV
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        tmp.write(audio_bytes)
-        tmp.flush()
-        tmp.close()
-        st.session_state.audio_file = tmp.name
-        st.audio(audio_bytes, format="audio/wav")
-
-    # Or upload
-    st.subheader("📂 Or Upload Audio File")
-    uploaded_file = st.file_uploader("Choose WAV file (mono recommended)", type=["wav", "mp3"])
-    if uploaded_file is not None:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        tmp.write(uploaded_file.getvalue())
-        tmp.flush()
-        tmp.close()
-        st.session_state.audio_file = tmp.name
-        st.audio(uploaded_file)
-
-    # Analyze button
-    if st.button("Analyze Voice"):
-        if not st.session_state.audio_file:
-            st.warning("Please record or upload an audio file first.")
-            return
-
-        with st.spinner("Extracting features and predicting..."):
-            features, audio_plots = extract_features(st.session_state.audio_file)
-            if not features:
-                return
-
-            df = pd.DataFrame([features])
-
-            # load model (or ask to upload)
-            model = get_model()
-            try:
-                prediction = int(model.predict(df)[0])
-            except Exception as e:
-                st.error(f"Model prediction failed: {e}")
-                return
-
-            try:
-                proba = float(model.predict_proba(df)[0][1])
-            except Exception:
-                # if predict_proba not available, set a NaN
-                proba = float(np.nan)
-
-            # Results
-            st.subheader("Results")
-            col1, col2 = st.columns(2)
-            pred_label = "🧠 Possible Parkinson's" if prediction else "✅ Healthy"
-            conf_text = f"{proba*100:.1f}%" if not np.isnan(proba) else "N/A"
-            col1.metric("Prediction", pred_label, conf_text)
-            col2.metric("Risk Level", "High" if (not np.isnan(proba) and proba > 0.7) else "Medium" if (not np.isnan(proba) and proba > 0.5) else "Low")
-
-            # Visualizations
-            with st.expander("Audio Visualizations"):
+    # Analysis section
+    if st.button("Analyze Voice", type="primary") and audio_source:
+        with st.spinner("Analyzing voice patterns..."):
+            features, audio_plots = extract_features(audio_source)
+            
+            if features:
+                model = load_model()
+                df = pd.DataFrame([features])
+                
                 try:
-                    cols = st.columns(2)
-                    cols[0].image(audio_plots[0], caption="Waveform")
-                    cols[1].image(audio_plots[1], caption="Spectrogram")
+                    prediction = model.predict(df)[0]
+                    proba = model.predict_proba(df)[0][1]
+                    
+                    # Display results
+                    st.success("Analysis Complete!")
+                    
+                    col1, col2 = st.columns(2)
+                    col1.metric(
+                        "Prediction", 
+                        "🧠 Possible Parkinson's" if prediction else "✅ Healthy",
+                        f"{proba*100:.1f}%"
+                    )
+                    col2.metric(
+                        "Confidence Level", 
+                        "High" if proba > 0.7 else "Medium" if proba > 0.5 else "Low"
+                    )
+                    
+                    # Visualizations
+                    with st.expander("Audio Analysis"):
+                        st.image(audio_plots[0], caption="Waveform")
+                        st.image(audio_plots[1], caption="Spectrogram")
+                    
+                    # Feature details
+                    with st.expander("Technical Features"):
+                        st.dataframe(df.T.style.background_gradient(cmap="Blues"))
+                    
+                    # Download report
+                    pdf_report = create_pdf_report(features, prediction, proba, audio_plots)
+                    st.download_button(
+                        label="📄 Download Full Report",
+                        data=pdf_report,
+                        file_name="parkinson_analysis.pdf",
+                        mime="application/pdf"
+                    )
+                
                 except Exception as e:
-                    st.warning(f"Could not show visualizations: {e}")
-
-            with st.expander("Feature Details"):
-                # show transposed DataFrame to be easy to read
-                st.dataframe(df.T)
-
-            # PDF report
-            pdf_bytes = create_pdf_report(features, prediction, proba if not np.isnan(proba) else 0.0, audio_plots)
-            st.download_button("Download PDF Report", data=pdf_bytes, file_name="parkinson_analysis.pdf", mime="application/pdf")
+                    st.error(f"Prediction failed: {str(e)}")
 
 if __name__ == "__main__":
     main()
