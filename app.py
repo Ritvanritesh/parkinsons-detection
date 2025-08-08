@@ -44,9 +44,16 @@ def safe_praat_call(func, *args, default=0):
         warnings.warn(f"Praat call failed: {str(e)}")
         return default
 
-def save_audio_file(audio_bytes, file_extension="wav"):
+def save_audio_file(audio_data, file_extension="wav"):
+    """Handle both bytes and file upload objects"""
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}")
-    temp_file.write(audio_bytes)
+    
+    if isinstance(audio_data, bytes):
+        temp_file.write(audio_data)
+    else:  # Handle file upload object
+        audio_data.seek(0)
+        temp_file.write(audio_data.read())
+        
     temp_file.close()
     return temp_file.name
 
@@ -205,13 +212,19 @@ def extract_features(audio_path):
         st.error(f"Feature extraction failed: {str(e)}")
         return None, None
 
-def show_audio_visualizations(audio_bytes):
+def show_audio_visualizations(audio_data):
     try:
-        # Convert bytes to numpy array
-        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
-            tmp.write(audio_bytes)
-            tmp.flush()
-            y, sr = librosa.load(tmp.name, sr=22050)
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            if isinstance(audio_data, bytes):
+                tmp.write(audio_data)
+            else:  # Handle file upload object
+                audio_data.seek(0)
+                tmp.write(audio_data.read())
+            tmp_path = tmp.name
+        
+        # Load audio
+        y, sr = librosa.load(tmp_path, sr=22050)
         
         # Waveform plot
         fig1 = go.Figure()
@@ -246,6 +259,12 @@ def show_audio_visualizations(audio_bytes):
             yaxis_type='log',
             height=300
         )
+        
+        # Clean up
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
         
         return fig1, fig2
         
@@ -289,26 +308,20 @@ def main():
         
         if uploaded_file:
             st.audio(uploaded_file, format="audio/wav")
-            uploaded_file.seek(0)  # Reset file pointer
 
     # Analysis section
     if st.button("Analyze Voice", type="primary", use_container_width=True):
         if audio_bytes or uploaded_file:
             with st.spinner("Analyzing voice patterns..."):
                 try:
-                    # Get audio data in correct format
-                    if audio_bytes:
-                        audio_data = audio_bytes
-                    else:
-                        audio_data = uploaded_file.read()
+                    # Get audio data
+                    audio_data = audio_bytes if audio_bytes else uploaded_file
                     
                     # Save to temporary file
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                        tmp.write(audio_data)
-                        tmp_path = tmp.name
+                    audio_path = save_audio_file(audio_data)
                     
                     # Extract features
-                    features, audio_plots = extract_features(tmp_path)
+                    features, audio_plots = extract_features(audio_path)
                     
                     if features:
                         # Show visualizations
@@ -364,7 +377,7 @@ def main():
                     
                     # Clean up
                     try:
-                        os.unlink(tmp_path)
+                        os.unlink(audio_path)
                     except:
                         pass
                     
