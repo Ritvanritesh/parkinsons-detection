@@ -1,5 +1,6 @@
-# %%writefile parkinsons_voice_app.py
+# parkinsons_voice_app.py
 import streamlit as st
+from audio_recorder_streamlit import audio_recorder
 import librosa
 import numpy as np
 import parselmouth
@@ -12,8 +13,6 @@ import os
 import tempfile
 import matplotlib.pyplot as plt
 from fpdf import FPDF
-import sounddevice as sd
-import soundfile as sf
 import time
 
 # Set page config
@@ -23,16 +22,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# Load model
+# Load model (strict mode - no fake predictions)
 @st.cache_resource
 def load_model():
-    try:
-        return joblib.load("xgb_clf_new.joblib")
-    except:
-        from sklearn.ensemble import RandomForestClassifier
-        model = RandomForestClassifier()
-        model.fit(np.random.rand(10,22), np.random.randint(0,2,10))
-        return model
+    if not os.path.exists("parkinsons_model.pkl"):
+        st.error("❌ Model file 'parkinsons_model.pkl' not found. Please add it to the app directory.")
+        st.stop()
+    return joblib.load("parkinsons_model.pkl")
 
 def safe_praat_call(func, *args, default=0):
     try:
@@ -40,20 +36,6 @@ def safe_praat_call(func, *args, default=0):
     except Exception as e:
         warnings.warn(f"Praat call failed: {str(e)}")
         return default
-
-def record_audio(duration=5, sample_rate=44100):
-    st.write(f"Recording for {duration} seconds...")
-    recording = sd.rec(int(duration * sample_rate),
-                     samplerate=sample_rate,
-                     channels=1)
-    sd.wait()
-    return recording, sample_rate
-
-def save_audio(recording, sample_rate):
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    sf.write(temp_file.name, recording, sample_rate)
-    temp_file.close()
-    return temp_file.name
 
 def create_pdf_report(features, prediction, proba, audio_plots):
     pdf = FPDF()
@@ -99,8 +81,7 @@ def create_pdf_report(features, prediction, proba, audio_plots):
         except:
             pass
     
-    # Convert to bytes explicitly
-    return bytes(pdf.output(dest='S'))
+    return pdf.output(dest='S').encode('latin-1')
 
 def plot_audio_features(y, sr):
     plots = []
@@ -213,21 +194,31 @@ def main():
         st.header("Instructions")
         st.markdown("1. Record using microphone or upload WAV file\n2. Click Analyze\n3. View results and download report")
 
-    if 'audio_file' not in st.session_state:
-        st.session_state.audio_file = None
-
+    # Live recording
     st.subheader("Live Recording")
-    if st.button("Record Audio (5 seconds)"):
-        recording, sample_rate = record_audio()
-        audio_file = save_audio(recording, sample_rate)
-        st.session_state.audio_file = audio_file
-        st.audio(audio_file, format='audio/wav')
+    audio_bytes = audio_recorder(
+        text="Click to record (speak 'ahhh' for 3-5 seconds):",
+        recording_color="#e8b62c",
+        neutral_color="#6aa36f",
+        icon_name="microphone",
+        icon_size="2x",
+    )
+    
+    audio_file = None
+    if audio_bytes:
+        # Save to temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        temp_file.write(audio_bytes)
+        temp_file.close()
+        audio_file = temp_file.name
+        st.audio(audio_bytes, format="audio/wav")
 
+    # File upload fallback
     st.subheader("Or Upload Audio File")
     uploaded_file = st.file_uploader("Choose WAV file", type=["wav"])
 
     if st.button("Analyze Voice"):
-        audio_source = uploaded_file if uploaded_file else st.session_state.audio_file
+        audio_source = audio_file if audio_file else (uploaded_file.name if uploaded_file else None)
         
         if audio_source:
             with st.spinner("Analyzing..."):
@@ -236,7 +227,7 @@ def main():
                         features, audio_plots = extract_features(audio_source)
                     else:
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                            tmp.write(audio_source.getvalue())
+                            tmp.write(uploaded_file.getvalue())
                             tmp_path = tmp.name
                             tmp.close()
                         features, audio_plots = extract_features(tmp_path)
@@ -248,12 +239,8 @@ def main():
                     df = pd.DataFrame([features])
                     model = load_model()
                     
-                    try:
-                        prediction = model.predict(df)[0]
-                        proba = model.predict_proba(df)[0][1]
-                    except:
-                        prediction = np.random.choice([0, 1])
-                        proba = np.random.random()
+                    prediction = model.predict(df)[0]
+                    proba = model.predict_proba(df)[0][1]
                     
                     st.subheader("Results")
                     col1, col2 = st.columns(2)
