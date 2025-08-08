@@ -30,7 +30,7 @@ st.set_page_config(
 @st.cache_resource
 def load_model():
     try:
-        return joblib.load("xgb_clf_new.joblib")
+        return joblib.load("parkinsons_model.pkl")
     except:
         from sklearn.ensemble import RandomForestClassifier
         model = RandomForestClassifier()
