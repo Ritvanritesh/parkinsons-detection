@@ -1,6 +1,7 @@
 # %%writefile parkinsons_voice_app.py
 import streamlit as st
 import librosa
+import librosa.display
 import numpy as np
 import parselmouth
 import pandas as pd
