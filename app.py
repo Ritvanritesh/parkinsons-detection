@@ -1,4 +1,4 @@
-# %%writefile parkinsons_voice_app.py
+# parkinsons_voice_app.py
 import streamlit as st
 import librosa
 import numpy as np
@@ -14,8 +14,9 @@ from fpdf import FPDF
 import time
 from datetime import datetime
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from io import BytesIO
 from audio_recorder_streamlit import audio_recorder
+import soundfile as sf
 import base64
 
 # Set page config
@@ -45,15 +46,12 @@ def safe_praat_call(func, *args, default=0):
         return default
 
 def save_audio_file(audio_bytes, file_extension="wav"):
-    """
-    Save audio bytes to a temporary file
-    """
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}")
     temp_file.write(audio_bytes)
     temp_file.close()
     return temp_file.name
 
-def create_pdf_report(features, prediction, proba, audio_plots, additional_info=None):
+def create_pdf_report(features, prediction, proba, audio_plots):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -82,54 +80,47 @@ def create_pdf_report(features, prediction, proba, audio_plots, additional_info=
     pdf.cell(200, 10, txt=f"Risk Level: {risk_level}", ln=1)
     pdf.ln(10)
     
-    # Disclaimer
-    pdf.set_font("Arial", 'I', 10)
-    pdf.multi_cell(0, 5, txt="Note: This analysis is not a definitive diagnosis. Please consult a medical professional for clinical assessment.")
-    pdf.ln(10)
-    
-    # Features
+    # Features table
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Detailed Feature Analysis", ln=1)
     pdf.set_font("Arial", size=10)
     
-    # Create table header
+    # Table header
     pdf.set_fill_color(200, 220, 255)
     pdf.cell(100, 10, "Feature", 1, 0, 'C', 1)
     pdf.cell(40, 10, "Value", 1, 0, 'C', 1)
     pdf.cell(50, 10, "Normal Range", 1, 1, 'C', 1)
     
-    # Feature reference ranges (example values)
-    ref_ranges = {
-        "MDVP:Fo(Hz)": "100-250 Hz",
-        "MDVP:Fhi(Hz)": "150-350 Hz",
-        "MDVP:Flo(Hz)": "80-200 Hz",
-        "MDVP:Jitter(%)": "<1.04%",
-        "HNR": ">20 dB",
-        "PPE": "<0.20"
-    }
-    
-    # Alternate row colors
+    # Feature rows
     fill = False
-    for i, (feature, value) in enumerate(features.items()):
+    for feature, value in features.items():
         fill = not fill
         pdf.set_fill_color(240, 240, 240) if fill else pdf.set_fill_color(255, 255, 255)
-        
         pdf.cell(100, 8, feature, 1, 0, 'L', fill)
         pdf.cell(40, 8, f"{value:.4f}", 1, 0, 'C', fill)
-        pdf.cell(50, 8, ref_ranges.get(feature, "N/A"), 1, 1, 'C', fill)
+        
+        # Add reference ranges
+        ref_range = ""
+        if "Jitter" in feature:
+            ref_range = "<1.04%"
+        elif "Shimmer" in feature:
+            ref_range = "<0.35 dB"
+        elif "HNR" in feature:
+            ref_range = ">20 dB"
+        elif "Fo" in feature:
+            ref_range = "100-250 Hz"
+            
+        pdf.cell(50, 8, ref_range, 1, 1, 'C', fill)
     
     # Add visualizations
     for plot in audio_plots:
         pdf.add_page()
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 10, f"Audio Analysis: {plot.split('_')[-1].split('.')[0]}", 0, 1)
-        pdf.image(plot, x=10, y=20, w=180)
+        pdf.image(plot, x=10, y=10, w=180)
         try:
             os.unlink(plot)
         except:
             pass
     
-    # Convert to bytes
     return pdf.output(dest='S').encode('latin-1')
 
 def plot_audio_features(y, sr):
@@ -158,27 +149,6 @@ def plot_audio_features(y, sr):
     plt.close()
     plots.append(spectrogram_path)
     
-    # Pitch contour plot
-    if len(y) > 0:
-        try:
-            snd = parselmouth.Sound(y, sr)
-            pitch = snd.to_pitch()
-            pitch_values = pitch.selected_array['frequency']
-            pitch_values[pitch_values == 0] = np.nan
-            
-            plt.figure(figsize=(10, 4))
-            plt.plot(pitch.xs(), pitch_values, 'o', markersize=2)
-            plt.title('Pitch Contour')
-            plt.xlabel('Time (s)')
-            plt.ylabel('Frequency (Hz)')
-            plt.ylim(50, 500)
-            pitch_path = os.path.join(temp_dir, f"pitch_{int(time.time())}.png")
-            plt.savefig(pitch_path, bbox_inches='tight', dpi=300)
-            plt.close()
-            plots.append(pitch_path)
-        except:
-            pass
-    
     return plots
 
 def extract_features(audio_path):
@@ -194,7 +164,7 @@ def extract_features(audio_path):
 
     try:
         y, sr = librosa.load(audio_path, sr=22050)
-        if len(y) < sr * 0.5:  # Minimum 0.5 seconds
+        if len(y) < sr * 0.5:
             st.warning("Audio too short for analysis (minimum 0.5 seconds)")
             return None, None
 
@@ -202,7 +172,7 @@ def extract_features(audio_path):
 
         # Create temporary file for Parselmouth
         temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        librosa.output.write_wav(temp_wav.name, y, sr)
+        sf.write(temp_wav.name, y, sr)
         temp_wav.close()
         snd = parselmouth.Sound(temp_wav.name)
         os.unlink(temp_wav.name)
@@ -260,7 +230,7 @@ def show_audio_visualizations(audio_bytes):
     try:
         y, sr = librosa.load(BytesIO(audio_bytes), sr=22050)
         
-        # Create interactive waveform plot
+        # Waveform plot
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(
             x=np.arange(len(y))/sr,
@@ -276,7 +246,7 @@ def show_audio_visualizations(audio_bytes):
             height=300
         )
         
-        # Create interactive spectrogram
+        # Spectrogram plot
         D = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
         fig2 = go.Figure()
         fig2.add_trace(go.Heatmap(
@@ -294,42 +264,11 @@ def show_audio_visualizations(audio_bytes):
             height=300
         )
         
-        # Create pitch contour if possible
-        fig3 = None
-        try:
-            temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            librosa.output.write_wav(temp_wav.name, y, sr)
-            temp_wav.close()
-            snd = parselmouth.Sound(temp_wav.name)
-            os.unlink(temp_wav.name)
-            
-            pitch = snd.to_pitch()
-            pitch_values = pitch.selected_array['frequency']
-            pitch_values[pitch_values == 0] = np.nan
-            
-            fig3 = go.Figure()
-            fig3.add_trace(go.Scatter(
-                x=pitch.xs(),
-                y=pitch_values,
-                mode='markers',
-                marker=dict(size=4, color='crimson'),
-                name='Pitch'
-            ))
-            fig3.update_layout(
-                title='Pitch Contour',
-                xaxis_title='Time (s)',
-                yaxis_title='Frequency (Hz)',
-                yaxis_range=[50, 500],
-                height=300
-            )
-        except:
-            pass
-        
-        return fig1, fig2, fig3
+        return fig1, fig2
         
     except Exception as e:
         st.error(f"Audio visualization failed: {str(e)}")
-        return None, None, None
+        return None, None
 
 def main():
     st.title("🧠 Parkinson's Disease Voice Analysis")
@@ -344,15 +283,6 @@ def main():
         1. **Record** using microphone or **upload** WAV file
         2. Click **Analyze** button
         3. View results and download report
-        """)
-        
-        st.header("About")
-        st.markdown("""
-        This tool analyzes voice features that may be affected by Parkinson's disease:
-        - Pitch variations (jitter)
-        - Amplitude variations (shimmer)
-        - Harmonic-to-noise ratios
-        - Other acoustic markers
         """)
         
         st.warning("""
@@ -373,7 +303,6 @@ def main():
             neutral_color="#6aa36f",
             icon_name="microphone",
             icon_size="2x",
-            energy_threshold=(-1.0, 1.0),
             pause_threshold=5.0
         )
         
@@ -389,11 +318,12 @@ def main():
         )
         
         if uploaded_file:
-            st.audio(uploaded_file, format="audio/wav")
+            st.audio(uploaded_file.read(), format="audio/wav")
+            uploaded_file.seek(0)  # Reset file pointer
     
     # Analysis section
     if st.button("Analyze Voice", type="primary", use_container_width=True):
-        audio_source = audio_bytes if audio_bytes else uploaded_file
+        audio_source = audio_bytes if audio_bytes else (uploaded_file.read() if uploaded_file else None)
         
         if audio_source:
             with st.spinner("Analyzing voice patterns..."):
@@ -402,23 +332,20 @@ def main():
                     if isinstance(audio_source, bytes):
                         audio_path = save_audio_file(audio_source)
                     else:
-                        audio_path = save_audio_file(audio_source.read())
+                        audio_path = save_audio_file(audio_source)
                     
-                    # Extract features and create visualizations
+                    # Extract features
                     features, audio_plots = extract_features(audio_path)
                     
                     if features:
                         # Show visualizations
                         st.subheader("Audio Analysis")
-                        fig1, fig2, fig3 = show_audio_visualizations(audio_source if isinstance(audio_source, bytes) else audio_source.read())
+                        fig1, fig2 = show_audio_visualizations(audio_source if isinstance(audio_source, bytes) else audio_source)
                         
                         if fig1 and fig2:
                             cols = st.columns(2)
                             cols[0].plotly_chart(fig1, use_container_width=True)
                             cols[1].plotly_chart(fig2, use_container_width=True)
-                            
-                            if fig3:
-                                st.plotly_chart(fig3, use_container_width=True)
                         
                         # Make prediction
                         df = pd.DataFrame([features])
@@ -433,7 +360,7 @@ def main():
                         
                         # Show results
                         st.subheader("Results")
-                        col1, col2, col3 = st.columns(3)
+                        col1, col2 = st.columns(2)
                         
                         with col1:
                             st.metric(
@@ -451,27 +378,8 @@ def main():
                                 help="Risk level based on prediction confidence"
                             )
                         
-                        with col3:
-                            st.metric(
-                                "Audio Quality", 
-                                "Good" if df["HNR"].values[0] > 20 else "Fair" if df["HNR"].values[0] > 10 else "Poor",
-                                help="Higher HNR indicates better audio quality"
-                            )
-                        
-                        # Show feature details
-                        with st.expander("View detailed feature analysis"):
-                            st.dataframe(
-                                df.T.style.background_gradient(cmap="Blues"),
-                                use_container_width=True
-                            )
-                        
-                        # Generate and offer PDF report
-                        pdf_report = create_pdf_report(
-                            features, 
-                            prediction, 
-                            proba, 
-                            audio_plots
-                        )
+                        # Generate PDF report
+                        pdf_report = create_pdf_report(features, prediction, proba, audio_plots)
                         
                         st.download_button(
                             label="Download Full Report (PDF)",
