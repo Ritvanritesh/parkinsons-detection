@@ -17,7 +17,6 @@ import plotly.graph_objects as go
 from io import BytesIO
 from audio_recorder_streamlit import audio_recorder
 import soundfile as sf
-import base64
 
 # Set page config
 st.set_page_config(
@@ -56,61 +55,41 @@ def create_pdf_report(features, prediction, proba, audio_plots):
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     
-    # Title
+    # Title and metadata
     pdf.set_font("Arial", 'B', 16)
     pdf.cell(200, 10, txt="Parkinson's Voice Analysis Report", ln=1, align='C')
-    pdf.ln(10)
-    
-    # Report metadata
     pdf.set_font("Arial", size=10)
     pdf.cell(200, 10, txt=f"Report generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=1)
-    pdf.ln(5)
+    pdf.ln(10)
     
-    # Results
+    # Results section
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Diagnostic Results", ln=1)
     pdf.set_font("Arial", size=12)
     
-    pred_text = "Possible Parkinson's detected" if prediction else "No signs of Parkinson's detected"
-    confidence_text = f"Confidence level: {proba*100:.1f}%"
+    pred_text = "Possible Parkinson's" if prediction else "Healthy"
+    confidence = f"{proba*100:.1f}% confidence"
     risk_level = "High" if proba > 0.7 else "Medium" if proba > 0.5 else "Low"
     
-    pdf.cell(200, 10, txt=f"Conclusion: {pred_text}", ln=1)
-    pdf.cell(200, 10, txt=confidence_text, ln=1)
+    pdf.cell(200, 10, txt=f"Prediction: {pred_text}", ln=1)
+    pdf.cell(200, 10, txt=f"Confidence: {confidence}", ln=1)
     pdf.cell(200, 10, txt=f"Risk Level: {risk_level}", ln=1)
     pdf.ln(10)
     
     # Features table
     pdf.set_font("Arial", 'B', 14)
-    pdf.cell(200, 10, txt="Detailed Feature Analysis", ln=1)
+    pdf.cell(200, 10, txt="Feature Analysis", ln=1)
     pdf.set_font("Arial", size=10)
     
-    # Table header
-    pdf.set_fill_color(200, 220, 255)
-    pdf.cell(100, 10, "Feature", 1, 0, 'C', 1)
-    pdf.cell(40, 10, "Value", 1, 0, 'C', 1)
-    pdf.cell(50, 10, "Normal Range", 1, 1, 'C', 1)
-    
-    # Feature rows
-    fill = False
-    for feature, value in features.items():
-        fill = not fill
-        pdf.set_fill_color(240, 240, 240) if fill else pdf.set_fill_color(255, 255, 255)
-        pdf.cell(100, 8, feature, 1, 0, 'L', fill)
-        pdf.cell(40, 8, f"{value:.4f}", 1, 0, 'C', fill)
-        
-        # Add reference ranges
-        ref_range = ""
-        if "Jitter" in feature:
-            ref_range = "<1.04%"
-        elif "Shimmer" in feature:
-            ref_range = "<0.35 dB"
-        elif "HNR" in feature:
-            ref_range = ">20 dB"
-        elif "Fo" in feature:
-            ref_range = "100-250 Hz"
-            
-        pdf.cell(50, 8, ref_range, 1, 1, 'C', fill)
+    col_width = pdf.w / 3
+    row_height = pdf.font_size * 1.5
+    for i, (k, v) in enumerate(features.items()):
+        if i % 2 == 0:
+            pdf.set_fill_color(240, 240, 240)
+        else:
+            pdf.set_fill_color(255, 255, 255)
+        pdf.cell(col_width, row_height, txt=k, border=1, fill=True)
+        pdf.cell(col_width, row_height, txt=f"{v:.4f}", border=1, fill=True, ln=1)
     
     # Add visualizations
     for plot in audio_plots:
@@ -228,7 +207,11 @@ def extract_features(audio_path):
 
 def show_audio_visualizations(audio_bytes):
     try:
-        y, sr = librosa.load(BytesIO(audio_bytes), sr=22050)
+        # Convert bytes to numpy array
+        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
+            tmp.write(audio_bytes)
+            tmp.flush()
+            y, sr = librosa.load(tmp.name, sr=22050)
         
         # Waveform plot
         fig1 = go.Figure()
@@ -272,27 +255,14 @@ def show_audio_visualizations(audio_bytes):
 
 def main():
     st.title("🧠 Parkinson's Disease Voice Analysis")
-    st.markdown("""
-    Record or upload a short vocal recording (3-5 seconds of sustained 'ahhh' sound) for analysis.
-    This tool analyzes voice characteristics that may correlate with Parkinson's disease.
-    """)
-    
+    st.markdown("Record or upload a short 'ahhh' recording (3-5 seconds) for analysis")
+
     with st.sidebar:
         st.header("Instructions")
-        st.markdown("""
-        1. **Record** using microphone or **upload** WAV file
-        2. Click **Analyze** button
-        3. View results and download report
-        """)
-        
-        st.warning("""
-        **Disclaimer**: This is not a diagnostic tool. 
-        Always consult a medical professional for health concerns.
-        """)
+        st.markdown("1. Record using microphone or upload WAV file\n2. Click Analyze\n3. View results and download report")
 
-    st.subheader("1. Record or Upload Audio")
-    
-    # Audio recording/upload section
+    # Audio input section
+    st.subheader("1. Provide Audio Sample")
     col1, col2 = st.columns(2)
     
     with col1:
@@ -318,29 +288,32 @@ def main():
         )
         
         if uploaded_file:
-            st.audio(uploaded_file.read(), format="audio/wav")
+            st.audio(uploaded_file, format="audio/wav")
             uploaded_file.seek(0)  # Reset file pointer
-    
+
     # Analysis section
     if st.button("Analyze Voice", type="primary", use_container_width=True):
-        audio_source = audio_bytes if audio_bytes else (uploaded_file.read() if uploaded_file else None)
-        
-        if audio_source:
+        if audio_bytes or uploaded_file:
             with st.spinner("Analyzing voice patterns..."):
                 try:
-                    # Save audio to temporary file
-                    if isinstance(audio_source, bytes):
-                        audio_path = save_audio_file(audio_source)
+                    # Get audio data in correct format
+                    if audio_bytes:
+                        audio_data = audio_bytes
                     else:
-                        audio_path = save_audio_file(audio_source)
+                        audio_data = uploaded_file.read()
+                    
+                    # Save to temporary file
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp.write(audio_data)
+                        tmp_path = tmp.name
                     
                     # Extract features
-                    features, audio_plots = extract_features(audio_path)
+                    features, audio_plots = extract_features(tmp_path)
                     
                     if features:
                         # Show visualizations
                         st.subheader("Audio Analysis")
-                        fig1, fig2 = show_audio_visualizations(audio_source if isinstance(audio_source, bytes) else audio_source)
+                        fig1, fig2 = show_audio_visualizations(audio_data)
                         
                         if fig1 and fig2:
                             cols = st.columns(2)
@@ -384,10 +357,16 @@ def main():
                         st.download_button(
                             label="Download Full Report (PDF)",
                             data=pdf_report,
-                            file_name=f"parkinson_voice_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                            file_name="parkinson_voice_analysis.pdf",
                             mime="application/pdf",
                             use_container_width=True
                         )
+                    
+                    # Clean up
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
                     
                 except Exception as e:
                     st.error(f"Analysis failed: {str(e)}")
