@@ -17,6 +17,7 @@ import plotly.graph_objects as go
 from io import BytesIO
 from audio_recorder_streamlit import audio_recorder
 import soundfile as sf
+import wave
 
 # Set page config
 st.set_page_config(
@@ -26,7 +27,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Load model
 @st.cache_resource
 def load_model():
     try:
@@ -44,32 +44,33 @@ def safe_praat_call(func, *args, default=0):
         warnings.warn(f"Praat call failed: {str(e)}")
         return default
 
-def save_audio_file(audio_data, file_extension="wav"):
-    """Handle both bytes and file upload objects"""
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}")
-    
-    if isinstance(audio_data, bytes):
-        temp_file.write(audio_data)
-    else:  # Handle file upload object
-        audio_data.seek(0)
-        temp_file.write(audio_data.read())
-        
-    temp_file.close()
-    return temp_file.name
+def save_audio_bytes(audio_bytes):
+    """Properly save raw audio bytes to a WAV file"""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        with wave.open(tmp.name, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(44100)
+            wf.writeframes(audio_bytes)
+        return tmp.name
+
+def save_uploaded_file(uploaded_file):
+    """Save uploaded file to temporary location"""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(uploaded_file.read())
+        return tmp.name
 
 def create_pdf_report(features, prediction, proba, audio_plots):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     
-    # Title and metadata
     pdf.set_font("Arial", 'B', 16)
     pdf.cell(200, 10, txt="Parkinson's Voice Analysis Report", ln=1, align='C')
     pdf.set_font("Arial", size=10)
     pdf.cell(200, 10, txt=f"Report generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=1)
     pdf.ln(10)
     
-    # Results section
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Diagnostic Results", ln=1)
     pdf.set_font("Arial", size=12)
@@ -83,7 +84,6 @@ def create_pdf_report(features, prediction, proba, audio_plots):
     pdf.cell(200, 10, txt=f"Risk Level: {risk_level}", ln=1)
     pdf.ln(10)
     
-    # Features table
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Feature Analysis", ln=1)
     pdf.set_font("Arial", size=10)
@@ -98,7 +98,6 @@ def create_pdf_report(features, prediction, proba, audio_plots):
         pdf.cell(col_width, row_height, txt=k, border=1, fill=True)
         pdf.cell(col_width, row_height, txt=f"{v:.4f}", border=1, fill=True, ln=1)
     
-    # Add visualizations
     for plot in audio_plots:
         pdf.add_page()
         pdf.image(plot, x=10, y=10, w=180)
@@ -113,7 +112,6 @@ def plot_audio_features(y, sr):
     plots = []
     temp_dir = tempfile.gettempdir()
     
-    # Waveform plot
     plt.figure(figsize=(10, 4))
     librosa.display.waveshow(y, sr=sr)
     plt.title('Audio Waveform')
@@ -124,7 +122,6 @@ def plot_audio_features(y, sr):
     plt.close()
     plots.append(waveform_path)
     
-    # Spectrogram plot
     plt.figure(figsize=(10, 4))
     D = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
     librosa.display.specshow(D, sr=sr, x_axis='time', y_axis='log')
@@ -156,7 +153,6 @@ def extract_features(audio_path):
 
         audio_plots = plot_audio_features(y, sr)
 
-        # Create temporary file for Parselmouth
         temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         sf.write(temp_wav.name, y, sr)
         temp_wav.close()
@@ -212,21 +208,10 @@ def extract_features(audio_path):
         st.error(f"Feature extraction failed: {str(e)}")
         return None, None
 
-def show_audio_visualizations(audio_data):
+def show_audio_visualizations(audio_path):
     try:
-        # Create temporary file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            if isinstance(audio_data, bytes):
-                tmp.write(audio_data)
-            else:  # Handle file upload object
-                audio_data.seek(0)
-                tmp.write(audio_data.read())
-            tmp_path = tmp.name
+        y, sr = librosa.load(audio_path, sr=22050)
         
-        # Load audio
-        y, sr = librosa.load(tmp_path, sr=22050)
-        
-        # Waveform plot
         fig1 = go.Figure()
         fig1.add_trace(go.Scatter(
             x=np.arange(len(y))/sr,
@@ -242,7 +227,6 @@ def show_audio_visualizations(audio_data):
             height=300
         )
         
-        # Spectrogram plot
         D = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
         fig2 = go.Figure()
         fig2.add_trace(go.Heatmap(
@@ -260,12 +244,6 @@ def show_audio_visualizations(audio_data):
             height=300
         )
         
-        # Clean up
-        try:
-            os.unlink(tmp_path)
-        except:
-            pass
-        
         return fig1, fig2
         
     except Exception as e:
@@ -280,7 +258,6 @@ def main():
         st.header("Instructions")
         st.markdown("1. Record using microphone or upload WAV file\n2. Click Analyze\n3. View results and download report")
 
-    # Audio input section
     st.subheader("1. Provide Audio Sample")
     col1, col2 = st.columns(2)
     
@@ -309,16 +286,15 @@ def main():
         if uploaded_file:
             st.audio(uploaded_file, format="audio/wav")
 
-    # Analysis section
     if st.button("Analyze Voice", type="primary", use_container_width=True):
         if audio_bytes or uploaded_file:
             with st.spinner("Analyzing voice patterns..."):
                 try:
-                    # Get audio data
-                    audio_data = audio_bytes if audio_bytes else uploaded_file
-                    
-                    # Save to temporary file
-                    audio_path = save_audio_file(audio_data)
+                    # Save audio to proper WAV file
+                    if audio_bytes:
+                        audio_path = save_audio_bytes(audio_bytes)
+                    else:
+                        audio_path = save_uploaded_file(uploaded_file)
                     
                     # Extract features
                     features, audio_plots = extract_features(audio_path)
@@ -326,7 +302,7 @@ def main():
                     if features:
                         # Show visualizations
                         st.subheader("Audio Analysis")
-                        fig1, fig2 = show_audio_visualizations(audio_data)
+                        fig1, fig2 = show_audio_visualizations(audio_path)
                         
                         if fig1 and fig2:
                             cols = st.columns(2)
