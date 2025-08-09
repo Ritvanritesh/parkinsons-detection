@@ -1,23 +1,12 @@
-# Core requirements
 streamlit>=1.22.0
 librosa>=0.10.0
 numpy>=1.22.0
 pandas>=1.4.0
+parselmouth>=0.4.0
 scipy>=1.8.0
 joblib>=1.1.0
-
-# Audio processing
-praat-parselmouth>=0.4.0
-soundfile>=0.11.0
-audio-recorder-streamlit>=0.0.3
-
-# Visualization
 matplotlib>=3.5.0
-plotly>=5.10.0
-
-# Reporting
 fpdf2>=2.5.7
-
-# Additional utilities
-python-dateutil>=2.8.2
-tqdm>=4.64.0
+plotly>=5.10.0
+audio-recorder-streamlit>=0.0.3
+soundfile>=0.11.0
