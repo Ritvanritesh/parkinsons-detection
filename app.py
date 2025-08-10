@@ -2,9 +2,8 @@
 import streamlit as st
 import librosa
 import numpy as np
-import parselmouth
 import pandas as pd
-from scipy.stats import entropy
+from scipy.stats import entropy, kurtosis, skew
 import joblib
 import warnings
 import os
@@ -18,6 +17,7 @@ from io import BytesIO
 from audio_recorder_streamlit import audio_recorder
 import soundfile as sf
 import wave
+import sklearn
 
 # Set page config
 st.set_page_config(
@@ -39,16 +39,8 @@ def load_model():
     except Exception as e:
         raise RuntimeError(f"Error loading model: {e}")
 
-
-def safe_praat_call(func, *args, default=0):
-    try:
-        return func(*args)
-    except Exception as e:
-        warnings.warn(f"Praat call failed: {str(e)}")
-        return default
-
 def save_audio_bytes(audio_bytes):
-    """Properly save raw audio bytes to a WAV file"""
+    """Save raw audio bytes to a WAV file"""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
         with wave.open(tmp.name, 'wb') as wf:
             wf.setnchannels(1)
@@ -139,13 +131,12 @@ def plot_audio_features(y, sr):
 
 def extract_features(audio_path):
     features = {
-        "MDVP:Fo(Hz)": 0, "MDVP:Fhi(Hz)": 0, "MDVP:Flo(Hz)": 0,
-        "MDVP:Jitter(%)": 0, "MDVP:Jitter(Abs)": 0, "MDVP:RAP": 0,
-        "MDVP:PPQ": 0, "Jitter:DDP": 0, "MDVP:Shimmer": 0,
-        "MDVP:Shimmer(dB)": 0, "Shimmer:APQ3": 0, "Shimmer:APQ5": 0,
-        "MDVP:APQ": 0, "Shimmer:DDA": 0, "NHR": 0, "HNR": 0,
-        "RPDE": 0, "DFA": 0, "spread1": 0, "spread2": 0,
-        "D2": 0, "PPE": 0
+        "mean_f0": 0, "std_f0": 0, "min_f0": 0, "max_f0": 0,
+        "jitter": 0, "shimmer": 0, "hnr": 0, "nhr": 0,
+        "rpde": 0, "dfa": 0, "spread1": 0, "spread2": 0,
+        "d2": 0, "ppe": 0, "mfcc1": 0, "mfcc2": 0,
+        "mfcc3": 0, "mfcc4": 0, "spectral_centroid": 0,
+        "spectral_bandwidth": 0, "spectral_rolloff": 0
     }
 
     try:
@@ -156,53 +147,57 @@ def extract_features(audio_path):
 
         audio_plots = plot_audio_features(y, sr)
 
-        temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        sf.write(temp_wav.name, y, sr)
-        temp_wav.close()
-        snd = parselmouth.Sound(temp_wav.name)
-        os.unlink(temp_wav.name)
-
-        pitch = snd.to_pitch()
-        f0_values = pitch.selected_array['frequency']
-        f0_values = f0_values[f0_values > 0]
-
-        if len(f0_values) > 10:
+        # Fundamental frequency estimation
+        f0 = librosa.yin(y, fmin=50, fmax=500)
+        f0 = f0[f0 > 0]  # Remove unvoiced frames
+        
+        if len(f0) > 10:
             features.update({
-                "MDVP:Fo(Hz)": np.mean(f0_values),
-                "MDVP:Fhi(Hz)": np.max(f0_values),
-                "MDVP:Flo(Hz)": np.min(f0_values),
-                "PPE": entropy(f0_values) if len(f0_values) > 1 else 0
+                "mean_f0": np.mean(f0),
+                "std_f0": np.std(f0),
+                "min_f0": np.min(f0),
+                "max_f0": np.max(f0),
+                "ppe": entropy(f0) if len(f0) > 1 else 0,
+                "spread1": np.std(f0),
+                "spread2": np.var(f0),
+                "d2": np.percentile(f0, 99),
             })
 
-        point_process = parselmouth.praat.call(snd, "To PointProcess (periodic, cc)", 75, 300)
-        jitter_local = safe_praat_call(parselmouth.praat.call, point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
-        shimmer_local = safe_praat_call(parselmouth.praat.call, [snd, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
+        # Jitter and shimmer (approximations)
+        if len(f0) > 2:
+            diffs = np.diff(f0)
+            features["jitter"] = np.mean(np.abs(diffs)) / np.mean(f0)
+            amp = librosa.feature.rms(y=y)[0]
+            amp_diffs = np.diff(amp)
+            features["shimmer"] = np.mean(np.abs(amp_diffs)) / np.mean(amp)
 
+        # Harmonic-to-noise ratio
+        harmonic = librosa.effects.harmonic(y)
+        percussive = librosa.effects.percussive(y)
+        hnr = 10 * np.log10(np.mean(harmonic**2) / (np.mean(percussive**2) + 1e-6))
+        features["hnr"] = hnr
+        features["nhr"] = 1 / (hnr + 1e-6) if hnr > 0 else 0
+
+        # MFCCs
+        mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=4)
         features.update({
-            "MDVP:Jitter(%)": jitter_local,
-            "MDVP:Jitter(Abs)": jitter_local,
-            "MDVP:RAP": jitter_local,
-            "MDVP:PPQ": jitter_local,
-            "Jitter:DDP": jitter_local * 3,
-            "MDVP:Shimmer": shimmer_local,
-            "MDVP:Shimmer(dB)": shimmer_local,
-            "Shimmer:APQ3": shimmer_local / 3,
-            "Shimmer:APQ5": shimmer_local / 5,
-            "MDVP:APQ": shimmer_local,
-            "Shimmer:DDA": shimmer_local * 3,
+            "mfcc1": np.mean(mfccs[0]),
+            "mfcc2": np.mean(mfccs[1]),
+            "mfcc3": np.mean(mfccs[2]),
+            "mfcc4": np.mean(mfccs[3]),
         })
 
-        harmonicity = snd.to_harmonicity_cc()
-        hnr = safe_praat_call(parselmouth.praat.call, harmonicity, "Get mean", 0, 0)
-        features["HNR"] = hnr
-        features["NHR"] = 1 / hnr if hnr > 0 else 0
-
+        # Spectral features
+        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
+        spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr)
+        spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)
+        
         features.update({
-            "RPDE": entropy(f0_values),
-            "DFA": librosa.feature.rms(y=y).mean(),
-            "spread1": np.std(f0_values),
-            "spread2": np.var(f0_values),
-            "D2": np.percentile(f0_values, 99),
+            "spectral_centroid": np.mean(spectral_centroid),
+            "spectral_bandwidth": np.mean(spectral_bandwidth),
+            "spectral_rolloff": np.mean(spectral_rolloff),
+            "rpde": entropy(spectral_centroid[0]),
+            "dfa": librosa.feature.rms(y=y).mean(),
         })
 
         return features, audio_plots
