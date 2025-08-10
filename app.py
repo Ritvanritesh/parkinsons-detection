@@ -93,24 +93,56 @@ def extract_features(audio_path):
 
 def main():
     st.title("🧠 Parkinson's Disease Voice Analysis")
+    st.markdown("Record or upload a short 'ahhh' recording (3-5 seconds) for analysis")
+
+    with st.sidebar:
+        st.header("Instructions")
+        st.markdown("1. Record using microphone or upload WAV file\n2. Click Analyze\n3. View results and download report")
+
+    # Initialize variables
+    audio_bytes = None
+    uploaded_file = None
     
-    # [Previous UI code remains the same until the analysis button...]
+    st.subheader("1. Provide Audio Sample")
+    col1, col2 = st.columns(2)
     
-    if st.button("Analyze Voice", type="primary", use_container_width=True):
-        if audio_bytes or uploaded_file:
+    with col1:
+        st.markdown("**Record using microphone**")
+        audio_bytes = audio_recorder(
+            text="Click to record (5 seconds)",
+            recording_color="#e8b62c",
+            neutral_color="#6aa36f",
+            icon_name="microphone",
+            icon_size="2x",
+            pause_threshold=5.0
+        )
+        
+        if audio_bytes:
+            st.audio(audio_bytes, format="audio/wav")
+    
+    with col2:
+        st.markdown("**Or upload audio file**")
+        uploaded_file = st.file_uploader(
+            "Choose WAV file", 
+            type=["wav"],
+            label_visibility="collapsed"
+        )
+        
+        if uploaded_file:
+            st.audio(uploaded_file, format="audio/wav")
+
+    # Only show analyze button if we have audio
+    if audio_bytes is not None or uploaded_file is not None:
+        if st.button("Analyze Voice", type="primary", use_container_width=True):
             with st.spinner("Analyzing voice patterns..."):
                 try:
-                    # Handle audio bytes properly
+                    # Save audio to proper WAV file
                     if audio_bytes:
-                        if isinstance(audio_bytes, bytes):
-                            audio_path = save_audio_bytes(audio_bytes)
-                        else:
-                            # Convert other audio types to bytes if needed
-                            audio_path = save_audio_bytes(bytes(audio_bytes))
+                        audio_path = save_audio_bytes(audio_bytes)
                     else:
                         audio_path = save_uploaded_file(uploaded_file)
                     
-                    # [Rest of your analysis code...]
+                    # Rest of your analysis code...
                     
                 except Exception as e:
                     st.error(f"Analysis failed: {str(e)}")
@@ -121,6 +153,8 @@ def main():
                             os.unlink(audio_path)
                         except:
                             pass
+    else:
+        st.info("Please record or upload an audio file to analyze")
 
 if __name__ == "__main__":
     main()
