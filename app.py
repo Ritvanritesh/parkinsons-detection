@@ -31,11 +31,14 @@ st.set_page_config(
 def load_model():
     try:
         return joblib.load("parkinsons_model.pkl")
-    except:
-        from sklearn.ensemble import RandomForestClassifier
-        model = RandomForestClassifier()
-        model.fit(np.random.rand(10,22), np.random.randint(0,2,10))
-        return model
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            "The Parkinson's model file 'parkinsons_model.pkl' was not found. "
+            "Please ensure the model is available in the working directory."
+        )
+    except Exception as e:
+        raise RuntimeError(f"Error loading model: {e}")
+
 
 def safe_praat_call(func, *args, default=0):
     try:
