@@ -256,6 +256,10 @@ def main():
         st.header("Instructions")
         st.markdown("1. Record using microphone or upload WAV file\n2. Click Analyze\n3. View results and download report")
 
+    # Initialize variables
+    audio_bytes = None
+    uploaded_file = None
+    
     st.subheader("1. Provide Audio Sample")
     col1, col2 = st.columns(2)
     
@@ -284,8 +288,8 @@ def main():
         if uploaded_file:
             st.audio(uploaded_file, format="audio/wav")
 
-    if st.button("Analyze Voice", type="primary", use_container_width=True):
-        if audio_bytes or uploaded_file:
+    if audio_bytes is not None or uploaded_file is not None:
+        if st.button("Analyze Voice", type="primary", use_container_width=True):
             with st.spinner("Analyzing voice patterns..."):
                 try:
                     # Save audio to proper WAV file
@@ -349,14 +353,16 @@ def main():
                             use_container_width=True
                         )
                     
-                    # Clean up
-                    try:
-                        os.unlink(audio_path)
-                    except:
-                        pass
-                    
+                                       
                 except Exception as e:
                     st.error(f"Analysis failed: {str(e)}")
+                finally:
+                    # Clean up temp file
+                    if 'audio_path' in locals():
+                        try:
+                            os.unlink(audio_path)
+                        except:
+                            pass
         else:
             st.warning("Please record or upload an audio file first")
 
