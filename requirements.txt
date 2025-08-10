@@ -2,7 +2,6 @@ streamlit>=1.22.0
 librosa>=0.10.0
 numpy>=1.22.0
 pandas>=1.4.0
-parselmouth>=0.4.0
 scipy>=1.8.0
 joblib>=1.1.0
 matplotlib>=3.5.0
@@ -10,3 +9,7 @@ fpdf2>=2.5.7
 plotly>=5.10.0
 audio-recorder-streamlit>=0.0.3
 soundfile>=0.11.0
+
+pytz==2015.7  # Force the version parselmouth needs
+praat-parselmouth>=0.4.0
+pandas<1.4.0  # Use an older pandas version
