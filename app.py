@@ -248,6 +248,8 @@ def show_audio_visualizations(audio_path):
         st.error(f"Audio visualization failed: {str(e)}")
         return None, None
 
+# [Previous imports and setup code remains the same until the main() function]
+
 def main():
     st.title("🧠 Parkinson's Disease Voice Analysis")
     st.markdown("Record or upload a short 'ahhh' recording (3-5 seconds) for analysis")
@@ -288,6 +290,7 @@ def main():
         if uploaded_file:
             st.audio(uploaded_file, format="audio/wav")
 
+    # Analysis button and processing
     if audio_bytes is not None or uploaded_file is not None:
         if st.button("Analyze Voice", type="primary", use_container_width=True):
             with st.spinner("Analyzing voice patterns..."):
@@ -301,59 +304,61 @@ def main():
                     # Extract features
                     features, audio_plots = extract_features(audio_path)
                     
-                    if features:
-                        # Show visualizations
-                        st.subheader("Audio Analysis")
-                        fig1, fig2 = show_audio_visualizations(audio_path)
-                        
-                        if fig1 and fig2:
-                            cols = st.columns(2)
-                            cols[0].plotly_chart(fig1, use_container_width=True)
-                            cols[1].plotly_chart(fig2, use_container_width=True)
-                        
-                        # Make prediction
-                        df = pd.DataFrame([features])
-                        model = load_model()
-                        
-                        try:
-                            prediction = model.predict(df)[0]
-                            proba = model.predict_proba(df)[0][1]
-                        except:
-                            prediction = np.random.choice([0, 1])
-                            proba = np.random.random()
-                        
-                        # Show results
-                        st.subheader("Results")
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.metric(
-                                "Prediction", 
-                                "Possible Parkinson's" if prediction else "Healthy", 
-                                delta=f"{proba*100:.1f}% confidence",
-                                delta_color="inverse"
-                            )
-                        
-                        with col2:
-                            risk_level = "High" if proba > 0.7 else "Medium" if proba > 0.5 else "Low"
-                            st.metric(
-                                "Risk Level", 
-                                risk_level,
-                                help="Risk level based on prediction confidence"
-                            )
-                        
-                        # Generate PDF report
-                        pdf_report = create_pdf_report(features, prediction, proba, audio_plots)
-                        
-                        st.download_button(
-                            label="Download Full Report (PDF)",
-                            data=pdf_report,
-                            file_name="parkinson_voice_analysis.pdf",
-                            mime="application/pdf",
-                            use_container_width=True
+                    if features is None:
+                        st.warning("Feature extraction failed - please try a different audio sample")
+                        return
+                    
+                    # Show visualizations
+                    st.subheader("Audio Analysis")
+                    fig1, fig2 = show_audio_visualizations(audio_path)
+                    
+                    if fig1 and fig2:
+                        cols = st.columns(2)
+                        cols[0].plotly_chart(fig1, use_container_width=True)
+                        cols[1].plotly_chart(fig2, use_container_width=True)
+                    
+                    # Make prediction
+                    df = pd.DataFrame([features])
+                    model = load_model()
+                    
+                    try:
+                        prediction = model.predict(df)[0]
+                        proba = model.predict_proba(df)[0][1]
+                    except Exception as e:
+                        st.error(f"Prediction failed: {str(e)}")
+                        return
+                    
+                    # Show results
+                    st.subheader("Results")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.metric(
+                            "Prediction", 
+                            "Possible Parkinson's" if prediction else "Healthy", 
+                            delta=f"{proba*100:.1f}% confidence",
+                            delta_color="inverse"
                         )
                     
-                                       
+                    with col2:
+                        risk_level = "High" if proba > 0.7 else "Medium" if proba > 0.5 else "Low"
+                        st.metric(
+                            "Risk Level", 
+                            risk_level,
+                            help="Risk level based on prediction confidence"
+                        )
+                    
+                    # Generate PDF report
+                    pdf_report = create_pdf_report(features, prediction, proba, audio_plots)
+                    
+                    st.download_button(
+                        label="Download Full Report (PDF)",
+                        data=pdf_report,
+                        file_name="parkinson_voice_analysis.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                
                 except Exception as e:
                     st.error(f"Analysis failed: {str(e)}")
                 finally:
@@ -363,8 +368,8 @@ def main():
                             os.unlink(audio_path)
                         except:
                             pass
-        else:
-            st.warning("Please record or upload an audio file first")
+    else:
+        st.info("Please record or upload an audio file to analyze")
 
 if __name__ == "__main__":
     main()
